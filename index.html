@@ -364,7 +364,12 @@ const DRILLS = [
     how:['Skyd fra 5 pladser rundt om kurven.','Hent selv bolden – hurtigt!','Hvor mange kan du score på 60 sekunder?'], tip:'Hurtigt – men flot.' },
 ];
 
-const LEVEL_NAMES = { 1:'Grundspilleren', 2:'Skift & måtte', 3:'I bevægelse', 4:'To bolde & kombi' };
+// Rækkefølgen, øvelserne læres i (én ny pr. træningsdag). Bold og kurv skiftes, og sværhedsgraden stiger.
+const ORDER = ['drib','layup','lav','flot','haard','plade','finger','hopstop','livet','benene','hovedet',
+  'crossover','mikan','vdrib','straf','mellem','jorden','indud','rebound','bagryg','felter','ottetal','cirklen',
+  'gaa','gribskyd','hurtig','stopgaa','crosslayup','slalom','baglaens','kegle','slalomlayup','hop',
+  'to','toskift','cross40','tohoejlav','mellemgaa','tocross','uret','tolayup'];
+const PROG = ORDER.map(id=>DRILLS.find(d=>d.id===id)).filter(Boolean).concat(DRILLS.filter(d=>!ORDER.includes(d.id)));
 
 // ===== TESTDAG (søndag) – måler fremgang. Samme tests hver uge. =====
 // type 'makesof': 10 skud – hvor mange går i (her tæller vi forsøg). type 'streak': hvor mange i træk uden at tabe bolden.
@@ -388,9 +393,9 @@ const BADGES = [
   { id:'month',    emoji:'🌋', name:'30 dage i træk',  desc:'En hel måned. Vanvittigt.',           test:s=>s.streak.best>=30 },
   { id:'shots100', emoji:'🎯', name:'100 scoringer',   desc:'100 skud i kurven i alt.',            test:s=>totalScores(s)>=100 },
   { id:'shots500', emoji:'🧨', name:'500 scoringer',   desc:'500 skud i kurven i alt.',            test:s=>totalScores(s)>=500 },
-  { id:'lvl2',     emoji:'2️⃣', name:'Niveau 2',        desc:'Du har låst niveau 2 op.',            test:s=>s.level>=2 },
-  { id:'lvl3',     emoji:'3️⃣', name:'Niveau 3',        desc:'Du har låst niveau 3 op.',            test:s=>s.level>=3 },
-  { id:'lvl4',     emoji:'4️⃣', name:'Niveau 4',        desc:'Du har låst niveau 4 op.',            test:s=>s.level>=4 },
+  { id:'learn20',  emoji:'📗', name:'20 øvelser lært',  desc:'Halvvejs op ad stigen.',              test:s=>s.unlocked>=20 },
+  { id:'learn30',  emoji:'📘', name:'30 øvelser lært',  desc:'Nu kan du mere end de fleste.',       test:s=>s.unlocked>=30 },
+  { id:'learnall', emoji:'🎓', name:'Hele stigen',     desc:'Alle øvelser lært!',                  test:s=>s.unlocked>=PROG.length },
   { id:'bench4',   emoji:'📈', name:'Testdag x4',      desc:'Fire testdage gennemført.',           test:s=>benchDays(s)>=4 },
   { id:'duel',     emoji:'⚔️', name:'Duellant',        desc:'Din første duel.',                    test:s=>s.log.some(l=>l.kind==='duel') },
   { id:'prize',    emoji:'🎁', name:'Første præmie',   desc:'Din første præmie hentet.',           test:s=>s.prizes.some(p=>p.redeemedAt) },
@@ -510,7 +515,7 @@ function defaultPrizes(){
 }
 function defaultState(){
   return {
-    version:2, name:'', opponent:'Far', level:1,
+    version:3, name:'', opponent:'Far', unlocked:11, daily:10, plan:null,
     points:0,                               // point i alt (præmier er milepæle på denne)
     streak:{ current:0, best:0, lastDate:null, freebieWeek:null },
     log:[],                                 // {date,time,drill,kind:'level'|'extra'|'bench'|'duel',result,points,...}
@@ -528,6 +533,12 @@ function load(){
 function migrate(s){
   const d = defaultState();
   s.settings = Object.assign(d.settings, s.settings||{}); s.settings.eq = Object.assign(d.settings.eq, s.settings.eq||{});
+  // v2 -> v3: trin 1-4 erstattes af én samlet stige. Alt, der var låst op, forbliver låst op.
+  if(s.unlocked===undefined){
+    const lvl=s.level||1; const doneIds=new Set((s.log||[]).filter(l=>l.done).map(l=>l.drill));
+    let maxIdx=PROG.filter(x=>x.level<=lvl).length-1; PROG.forEach((d,i)=>{ if(doneIds.has(d.id)) maxIdx=Math.max(maxIdx,i); });
+    s.unlocked=Math.max(1, maxIdx+1); s.plan=null;
+  }
   for(const k of Object.keys(d)) if(s[k]===undefined) s[k]=d[k];
   if(!Array.isArray(s.prizes)||!s.prizes.length) s.prizes=defaultPrizes();
   return s;
@@ -550,8 +561,32 @@ function dayName(ds){ const [y,m,d]=ds.split('-').map(Number); return DAGE[new D
 const byId = Object.fromEntries(DRILLS.map(d=>[d.id,d]));
 const benchById = Object.fromEntries(BENCHMARKS.map(b=>[b.id,b]));
 function hasEq(d){ return (d.eq||[]).every(e=>S.settings.eq[e]); }
-function levelDrills(level=S.level){ return DRILLS.filter(d=>d.level===level && hasEq(d)); }
-function pointsPer(level=S.level){ const n=levelDrills(level).length||1; const per=Math.floor(DAILY_MAX/n); return {per, bonus:DAILY_MAX-per*n, n}; }
+function pool(){ return PROG.filter(hasEq); }                     // hele stigen med det udstyr, I har
+function unlockedDrills(){ return pool().slice(0, S.unlocked); }
+function nextNewDrill(){ return pool()[S.unlocked] || null; }
+function lastDone(id){ let last=null; for(const l of S.log) if(l.drill===id && l.done && (!last||l.date>last)) last=l.date; return last; }
+function seeded(str){ let h=1779033703^str.length; for(let i=0;i<str.length;i++){h=Math.imul(h^str.charCodeAt(i),3432918353);h=h<<13|h>>>19;}
+  return ()=>{ h=Math.imul(h^(h>>>16),2246822507); h=Math.imul(h^(h>>>13),3266489909); return ((h^=h>>>16)>>>0)/4294967296; }; }
+// Dagens plan: én NY øvelse (næste på stigen) + de øvelser, der er længst siden han har lavet – med en blanding af bold og kurv.
+function ensurePlan(){
+  const t=today();
+  if(S.plan && S.plan.date===t) return S.plan;
+  const rng=seeded(t+'plan'); const daily=S.daily||10;
+  const doneTodayIds=[...new Set(S.log.filter(l=>l.date===t&&l.kind==='level'&&l.done).map(l=>l.drill))];
+  const newD=nextNewDrill();
+  const ids=[...doneTodayIds]; if(newD && !ids.includes(newD.id)) ids.push(newD.id);
+  const cands=unlockedDrills().filter(d=>!ids.includes(d.id));
+  const key=d=>(lastDone(d.id)||'0000')+rng().toFixed(6);               // ældst først, tilfældig rækkefølge blandt lige gamle
+  const hand=cands.filter(d=>!d.score).sort((a,b)=>key(a)<key(b)?-1:1), hoop=cands.filter(d=>d.score).sort((a,b)=>key(a)<key(b)?-1:1);
+  const need=Math.max(0,daily-ids.length); const hoopShare=cands.length?hoop.length/cands.length:0; let nHoop=Math.round(need*hoopShare), nHand=need-nHoop;
+  if(nHoop>hoop.length){ nHand+=nHoop-hoop.length; nHoop=hoop.length; } if(nHand>hand.length){ nHoop=Math.min(hoop.length,nHoop+nHand-hand.length); nHand=hand.length; }
+  const pick=[...hand.slice(0,nHand),...hoop.slice(0,nHoop)];
+  pick.sort((a,b)=>(a.score?1:0)-(b.score?1:0) || PROG.indexOf(a)-PROG.indexOf(b));   // bold først, kurv bagefter
+  for(const d of pick) ids.push(d.id);
+  S.plan={date:t, drills:ids, newId:newD?newD.id:null}; save(); return S.plan;
+}
+function levelDrills(){ return ensurePlan().drills.map(id=>byId[id]).filter(d=>d&&hasEq(d)); }
+function pointsPer(){ const n=levelDrills().length||1; const per=Math.floor(DAILY_MAX/n); return {per, bonus:DAILY_MAX-per*n, n}; }
 function goalText(d){ if(d.type==='time') return `${d.seconds} sekunder`; return d.steps.map(s=>`${s.n} ${s.label.toLowerCase()}`).join(' · '); }
 function totalGoal(d){ return d.steps.reduce((a,s)=>a+s.n,0); }
 function doneToday(id, date=today()){ return S.log.some(l=>l.date===date && l.drill===id && l.kind==='level' && l.done); }
@@ -559,10 +594,11 @@ function dayPoints(date=today()){ return S.log.filter(l=>l.date===date).reduce((
 function fullDays(s){ return new Set(s.log.filter(l=>l.kind==='level' && l.full).map(l=>l.date)).size; }
 function totalScores(s){ return s.log.filter(l=>l.score).reduce((a,l)=>a+(l.result||0),0); }
 function benchDays(s){ return new Set(s.log.filter(l=>l.kind==='bench').map(l=>l.date)).size; }
-function suggested(){ // "Start her": roterer hver dag, så han ikke altid starter samme sted
-  const ds=levelDrills().filter(d=>!S.settings.rain||d.indoor); const left=ds.filter(d=>!doneToday(d.id)); if(!left.length) return null;
-  const dayIdx=Math.round(new Date(today()).getTime()/864e5); return left[dayIdx%left.length];
+function suggested(){ // "Start her": den nye øvelse først, ellers næste på listen
+  const P=ensurePlan(); const ds=levelDrills().filter(d=>!S.settings.rain||d.indoor); const left=ds.filter(d=>!doneToday(d.id)); if(!left.length) return null;
+  return left.find(d=>d.id===P.newId) || left[0];
 }
+function isNewToday(id){ return ensurePlan().newId===id; }
 
 // ===== STREAK =====
 function registerStreakDay(){
@@ -628,11 +664,11 @@ function renderHome(){
       : `<div class="card" style="background:#fff3e6"><b>Streaken er nulstillet.</b> En ny starter i dag – kom så! 🔥</div>`;
   }
   // Status-kort
-  h += `<div class="card main"><div class="label">Niveau ${S.level} · ${esc(LEVEL_NAMES[S.level]||'')}</div>
+  h += `<div class="card main"><div class="label">I dag · ${S.unlocked} af ${pool().length} øvelser lært</div>
     <div class="flex"><div class="grow"><h2 style="font-size:28px">${doneN} af ${n} øvelser i dag</h2><div style="opacity:.85;margin-top:2px">${dp} af ${DAILY_MAX} point · ${per} pr. øvelse${bonus?` + ${bonus} når alle er lavet`:''}</div></div><div style="font-size:44px">${doneN>=n?'🏆':'🏀'}</div></div>
     <div class="prizebar" style="background:rgba(255,255,255,.15)"><i style="width:${Math.min(100,doneN/n*100)}%"></i></div></div>`;
   // Start her
-  if(sug) h += `<div class="card" style="border:3px solid var(--orange)"><div class="label" style="color:var(--orange)">▶ Start her</div>
+  if(sug) h += `<div class="card" style="border:3px solid ${isNewToday(sug.id)?'#3b6fd8':'var(--orange)'}"><div class="label" style="color:${isNewToday(sug.id)?'#3b6fd8':'var(--orange)'}">${isNewToday(sug.id)?'🆕 Ny øvelse i dag!':'▶ Start her'}</div>
     <div class="drillrow"><div class="em">${sug.emoji}</div><div class="nm"><h2>${esc(sug.name)}</h2><div class="sub">${esc(goalText(sug))}</div></div></div>
     <button class="btn big" data-start="${sug.id}" data-kind="level">Start 🏀</button></div>`;
   else if(ds.length) h += `<div class="card center" style="background:#e4f7ec"><div style="font-size:40px">🎉</div><b>Alle øvelser er lavet i dag!</b><div class="muted">Vil du mere? Vælg selv en øvelse herunder.</div></div>`;
@@ -644,13 +680,13 @@ function renderHome(){
         return `<li><div class="em">${b.emoji}</div><div class="nm"><b>${esc(b.label)}</b><small>${e?'✓ i dag: '+e.result:(best!==undefined?'bedste: '+best:'første gang')}</small></div>${e?'<span style="color:var(--green);font-weight:800">✓</span>':`<button class="btn sm navy" data-start="${b.id}" data-kind="bench">Start</button>`}</li>`; }).join('')}</ul></div>`;
   }
   // Liste over niveauets øvelser
-  h += `<div class="card"><div class="label">Niveau ${S.level} – dagens øvelser</div><ul class="list">`+ds.map(d=>{ const done=doneToday(d.id); const hidden=S.settings.rain&&!d.indoor;
-    return `<li class="${hidden?'locked':''}" ${hidden?'':`data-start="${d.id}" data-kind="level" style="cursor:pointer"`}><div class="em">${done?'✅':d.emoji}</div><div class="nm"><b>${esc(d.name)}</b><small>${esc(goalText(d))}${hidden?' · udendørs':''}</small></div><span class="ink2" style="font-weight:800">${done?'+'+per:'›'}</span></li>`; }).join('')+`</ul></div>`;
+  h += `<div class="card"><div class="label">Dagens ${n} øvelser</div><ul class="list">`+ds.map(d=>{ const done=doneToday(d.id); const hidden=S.settings.rain&&!d.indoor; const nw=isNewToday(d.id);
+    return `<li class="${hidden?'locked':''}" ${hidden?'':`data-start="${d.id}" data-kind="level" style="cursor:pointer"`}><div class="em">${done?'✅':d.emoji}</div><div class="nm"><b>${esc(d.name)}${nw?' <span style="color:#3b6fd8;font-size:13px">🆕 NY</span>':''}</b><small>${esc(goalText(d))}${hidden?' · udendørs':''}</small></div><span class="ink2" style="font-weight:800">${done?'+'+per:'›'}</span></li>`; }).join('')+`</ul></div>`;
   // Præmie
   const next = S.prizes.filter(p=>!p.redeemedAt).sort((a,b)=>a.cost-b.cost)[0];
   if(next){ const pct=Math.min(100,S.points/next.cost*100);
     h += `<div class="card" data-go="prizes" style="cursor:pointer"><div class="label">Næste præmie</div><div class="flex"><span style="font-size:36px">${next.emoji}</span><div class="grow"><b>${esc(next.name)}</b><div class="muted">${S.points} / ${next.cost} point${S.points>=next.cost?' – du kan hente den! 🎉':' · mangler '+(next.cost-S.points)}</div></div></div><div class="prizebar"><i style="width:${pct}%"></i></div></div>`; }
-  h += `<div class="row2"><button class="card center" id="btn-extra"><div style="font-size:34px">➕</div><b>Vælg selv en øvelse</b><div class="muted">fra alle niveauer · ingen point</div></button>
+  h += `<div class="row2"><button class="card center" id="btn-extra"><div style="font-size:34px">➕</div><b>Vælg selv en øvelse</b><div class="muted">alle øvelser du har lært · ingen point</div></button>
     <button class="card center" id="btn-duel"><div style="font-size:34px">⚔️</div><b>Udfordr ${esc(S.opponent)}</b><div class="muted">hvem når længst?</div></button></div>`;
   const home=$('#s-home'); home.innerHTML=h;
   home.querySelectorAll('[data-start]').forEach(b=>b.addEventListener('click',()=>b.dataset.kind==='bench'?startBench(b.dataset.start):startDrill(b.dataset.start,b.dataset.kind)));
@@ -658,15 +694,14 @@ function renderHome(){
   $('#btn-extra').addEventListener('click', pickExtra); $('#btn-duel').addEventListener('click', pickDuel);
 }
 function drillPickerHTML(filterFn, attr){
-  let h='';
-  for(let L=1;L<=4;L++){ const ds=DRILLS.filter(d=>d.level===L && filterFn(d)); if(!ds.length) continue;
-    h+=`<h3 style="font-size:16px;color:var(--ink2);margin:12px 0 4px">Niveau ${L} · ${esc(LEVEL_NAMES[L])}${L>S.level?' 🔒':''}</h3><ul class="list">`+ds.map(d=>`<li ${attr}="${d.id}" style="cursor:pointer"><div class="em">${d.emoji}</div><div class="nm"><b>${esc(d.name)}</b><small>${esc(goalText(d))}</small></div><span>›</span></li>`).join('')+'</ul>'; }
-  return h||'<p class="muted">Ingen øvelser passer lige nu.</p>';
+  const ds=unlockedDrills().filter(filterFn); if(!ds.length) return '<p class="muted">Ingen øvelser passer lige nu.</p>';
+  const grp=[['Bold-håndtering',ds.filter(d=>!d.score)],['Ved kurven',ds.filter(d=>d.score)]];
+  return grp.filter(g=>g[1].length).map(([t,list])=>`<h3 style="font-size:16px;color:var(--ink2);margin:12px 0 4px">${t}</h3><ul class="list">`+list.map(d=>`<li ${attr}="${d.id}" style="cursor:pointer"><div class="em">${d.emoji}</div><div class="nm"><b>${esc(d.name)}</b><small>${esc(goalText(d))}</small></div><span>›</span></li>`).join('')+'</ul>').join('');
 }
 function pickExtra(){
-  modal(`<h3>Vælg selv ➕</h3><p class="muted">Træn hvad du vil – også øvelser fra andre niveauer. Point får du kun for dagens øvelser på dit niveau.</p>
+  modal(`<h3>Vælg selv ➕</h3><p class="muted">Træn hvad du vil af de øvelser, du har lært. Point får du kun for dagens ${S.daily||10} øvelser.</p>
     ${drillPickerHTML(d=>hasEq(d)&&(!S.settings.rain||d.indoor),'data-pick')}<button class="btn ghost big" onclick="closeModal()">Luk</button>`);
-  $('#modal-body').querySelectorAll('[data-pick]').forEach(li=>li.addEventListener('click',()=>{ closeModal(); startDrill(li.dataset.pick, byId[li.dataset.pick].level===S.level&&!doneToday(li.dataset.pick)?'level':'extra'); }));
+  $('#modal-body').querySelectorAll('[data-pick]').forEach(li=>li.addEventListener('click',()=>{ closeModal(); startDrill(li.dataset.pick, ensurePlan().drills.includes(li.dataset.pick)&&!doneToday(li.dataset.pick)?'level':'extra'); }));
 }
 
 // ===== ØVELSES-AFVIKLER =====
@@ -695,7 +730,7 @@ function openDrillScreen(html, d, kind){
 function startDrill(id, kind, opts={}){
   stopActive(); const d=byId[id];
   active={d, kind, step:0, count:0, counts:[], timer:null, opts};
-  const label = kind==='duel'?'Duel · Nu: '+esc(opts.who) : kind==='extra'?'Ekstra øvelse (ingen point)' : `Niveau ${d.level} · ${esc(d.cat)}`;
+  const label = kind==='duel'?'Duel · Nu: '+esc(opts.who) : kind==='extra'?'Ekstra øvelse (ingen point)' : (isNewToday(id)?'🆕 Ny øvelse i dag · ':'')+esc(d.cat);
   openDrillScreen(drillHeaderHTML(d,label,goalText(d))+`<div class="card"><div class="label" id="steplabel"></div><div class="control" id="control"></div></div>`, d, kind);
   renderControl();
 }
@@ -735,7 +770,8 @@ function finish(){
   const a=active; if(!a) return; stopActive(); active=null; const d=a.d;
   const result = d.type==='time' ? a.count : a.counts.reduce((x,y)=>x+y,0);
   if(a.kind==='duel') return duelResult(a, result);
-  const t=today(); let kind=a.kind; if(kind==='level' && (d.level!==S.level || doneToday(d.id))) kind='extra';
+  const t=today(); const P=ensurePlan(); let kind=a.kind; if(kind==='level' && (!P.drills.includes(d.id) || doneToday(d.id))) kind='extra';
+  let learned=false; if(kind==='level' && P.newId===d.id){ S.unlocked=Math.min(pool().length, S.unlocked+1); P.newId=null; learned=true; }
   const entry={date:t,time:Date.now(),drill:d.id,kind,result,done:true,points:0,score:!!d.score};
   const r={pts:0, msgs:[]};
   if(kind==='level'){
@@ -744,14 +780,15 @@ function finish(){
     if(doneN>=n){ entry.points+=bonus; entry.full=true; r.full=true; }
     r.streakMsg=registerStreakDay();
   }
-  S.log.push(entry); S.points+=entry.points; r.pts=entry.points;
+  S.log.push(entry); S.points+=entry.points; r.pts=entry.points; r.learned=learned;
   r.newBadges=checkBadges(); save();
   renderResult(d, result, r, kind);
 }
 function renderResult(d, result, r, kind){
   const s=$('#s-drill'); fanfare(); confetti(r.full?260:120);
   const msgs=[];
-  if(r.full) msgs.push(`<div class="record">💯 FULD DAG! Alle øvelser på niveau ${S.level} – ${DAILY_MAX} point i dag!</div>`);
+  if(r.learned){ const nx=nextNewDrill(); msgs.push(`<div class="record" style="background:#eef4ff;color:#3b6fd8">🆕 Ny øvelse lært: ${esc(d.name)}!${nx?' Næste gang lærer du: '+esc(nx.name):' Du har lært ALLE øvelser!'}</div>`); }
+  if(r.full) msgs.push(`<div class="record">💯 FULD DAG! Alle ${pointsPer().n} øvelser – ${DAILY_MAX} point i dag!</div>`);
   if(r.streakMsg) msgs.push(`<div class="record">${r.streakMsg}</div>`);
   if(kind==='extra') msgs.push(`<div class="detail">Ekstra træning tæller altid – bare ikke i point. 🙌</div>`);
   for(const b of (r.newBadges||[])) msgs.push(`<div class="record">${b.emoji} Nyt mærke: ${esc(b.name)}</div>`);
@@ -855,11 +892,9 @@ function renderProgress(){
   h+=`<h2 style="font-size:22px;margin:18px 0 8px">📈 Testdag-udvikling</h2>`;
   for(const b of BENCHMARKS){ const pts=S.log.filter(l=>l.kind==='bench'&&l.drill===b.id).map(l=>({date:l.date,value:l.result})).sort((p,q)=>p.date<q.date?-1:1); const best=S.records[b.id];
     h+=`<div class="card"><div class="flex"><span style="font-size:28px">${b.emoji}</span><div class="grow"><b>${esc(b.label)}</b><div class="muted">${pts.length?`${pts.length} test${pts.length>1?'s':''} · bedste: ${best}`:'Ikke testet endnu – første test på søndag'}</div></div></div>${chartSVG(pts,{label:b.label,max:b.attempts||0})}</div>`; }
-  h+=`<h2 style="font-size:22px;margin:18px 0 8px">🪜 Niveauer</h2><div class="card">`;
-  for(let L=1;L<=4;L++){ const ds=DRILLS.filter(d=>d.level===L); const locked=L>S.level; const times=id=>S.log.filter(l=>l.drill===id&&l.done).length;
-    h+=`<h3 style="font-size:17px;margin:${L>1?14:0}px 0 4px;color:var(--ink2)">${locked?'🔒':L===S.level?'▶':'✅'} Niveau ${L} · ${esc(LEVEL_NAMES[L])}${locked?' <span class="muted small">– en voksen låser op i Forældre-menuen</span>':''}</h3><ul class="list">`
-      +ds.map(d=>`<li class="${locked?'locked':''}"><div class="em">${d.emoji}</div><div class="nm"><b>${esc(d.name)}</b><small>${esc(goalText(d))}</small></div><span class="muted small">${times(d.id)?times(d.id)+'×':''}</span></li>`).join('')+'</ul>'; }
-  h+='</div>';
+  const pl=pool(); const times=id=>S.log.filter(l=>l.drill===id&&l.done).length;
+  h+=`<h2 style="font-size:22px;margin:18px 0 8px">🪜 Øvelsesstigen</h2><div class="card"><p class="muted small" style="margin:0 0 8px">${S.unlocked} af ${pl.length} øvelser lært. Hver træningsdag lærer du én ny.</p><ul class="list">`
+    +pl.map((d,i)=>{ const st=i<S.unlocked?'open':i===S.unlocked?'next':'locked'; return `<li class="${st==='locked'?'locked':''}"><div class="em">${st==='open'?d.emoji:st==='next'?'🆕':'🔒'}</div><div class="nm"><b>${i+1}. ${esc(d.name)}</b><small>${esc(goalText(d))}${st==='next'?' · næste nye øvelse':''}</small></div><span class="muted small">${times(d.id)?times(d.id)+'×':''}</span></li>`; }).join('')+'</ul></div>';
   h+=`<h2 style="font-size:22px;margin:18px 0 8px">🏅 Mærker</h2><div class="badges">${BADGES.map(b=>`<div class="badge ${S.badges.includes(b.id)?'':'locked'}"><div class="em">${b.emoji}</div><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></div>`).join('')}</div>`;
   $('#s-progress').innerHTML=h;
 }
@@ -886,9 +921,9 @@ function renderMore(){
     <div class="toggle"><span>🔊 Lyd</span><button class="switch ${S.settings.sound?'on':''}" id="t-sound"><i></i></button></div>
     <div class="toggle"><span>🗣️ Stemme (læser øvelserne op)</span><button class="switch ${S.settings.voice?'on':''}" id="t-voice"><i></i></button></div>
     <div class="toggle"><span>☔ Regnvejr (kun indendørs øvelser)</span><button class="switch ${S.settings.rain?'on':''}" id="t-rain"><i></i></button></div></div>
-  <div class="card"><div class="label">Sådan virker det</div><p class="small ink2" style="margin:0">Du er på <b>niveau ${S.level}</b> med ${n} øvelser. Hver øvelse giver <b>${per} point</b>${bonus?`, og laver du alle sammen samme dag, får du <b>${bonus} point ekstra</b>`:''} – højst <b>${DAILY_MAX} point om dagen</b>. Pointene samler sig op på præmiestigen. 🔥 Streak: træn hver dag – én fridag om ugen er tilladt. Om søndagen er der <b>testdag</b>, hvor du måler, om du bliver bedre. En voksen låser næste niveau op, når du er klar.</p></div>
+  <div class="card"><div class="label">Sådan virker det</div><p class="small ink2" style="margin:0">Hver dag får du <b>${n} øvelser</b>: én <b>ny øvelse</b> 🆕 fra stigen og ${n-1} af dem, du allerede kan – dem, der er længst siden. Hver øvelse giver <b>${per} point</b>${bonus?`, og laver du alle sammen samme dag, får du <b>${bonus} point ekstra</b>`:''} – højst <b>${DAILY_MAX} point om dagen</b>. Pointene samler sig op på præmiestigen. 🔥 Streak: træn hver dag – én fridag om ugen er tilladt. Om søndagen er der <b>testdag</b>, hvor du måler, om du bliver bedre.</p></div>
   <button class="btn big navy" id="btn-parent">👨‍👩‍👦 Forældre-menu</button>
-  <p class="muted center small mt">Basketbold v2.1 · ${DRILLS.length} øvelser · Åbn fra hjemmeskærmen for fuld skærm og offline-brug.</p>`;
+  <p class="muted center small mt">Basketbold v3 · ${DRILLS.length} øvelser · Åbn fra hjemmeskærmen for fuld skærm og offline-brug.</p>`;
   $('#t-sound').addEventListener('click',e=>{ S.settings.sound=!S.settings.sound; save(); e.currentTarget.classList.toggle('on'); beep(); });
   $('#t-voice').addEventListener('click',e=>{ S.settings.voice=!S.settings.voice; save(); e.currentTarget.classList.toggle('on'); if(S.settings.voice) speak('Hej! Nu læser jeg øvelserne op.'); else shutUp(); });
   $('#t-rain').addEventListener('click',e=>{ S.settings.rain=!S.settings.rain; save(); e.currentTarget.classList.toggle('on'); header(); });
@@ -903,8 +938,9 @@ function requirePin(fn){
 function parentMenu(){
   const E=S.settings.eq;
   modal(`<h3>👨‍👩‍👦 Forældre-menu</h3>
-    <div class="label">Niveau</div><p class="small ink2" style="margin:0 0 6px">Barnet bliver på et niveau, indtil I låser det næste op her. Alle øvelser på niveauet giver tilsammen ${DAILY_MAX} point om dagen.</p>
-    <div class="sel">${[1,2,3,4].map(L=>`<button data-lvl="${L}" class="${S.level===L?'on':''}">Niveau ${L}<br><small>${esc(LEVEL_NAMES[L])} · ${DRILLS.filter(d=>d.level===L).length} øvelser</small></button>`).join('')}</div>
+    <div class="label">Øvelsesstigen</div><p class="small ink2" style="margin:0 0 6px">Hver træningsdag låses én ny øvelse op automatisk. Her kan I skrue frem eller tilbage.</p>
+    <div class="flex"><span class="grow">Øvelser lært: <b id="unl">${S.unlocked}</b> af ${pool().length}</span><button class="btn ghost sm" data-unl="-1">−1</button><button class="btn ghost sm" data-unl="1">+1</button></div>
+    <div class="flex mt"><span class="grow">Øvelser pr. dag</span><div class="sel" style="margin:0">${[8,10,12].map(k=>`<button data-daily="${k}" class="${(S.daily||10)===k?'on':''}">${k}</button>`).join('')}</div></div>
     <div class="hr"></div>
     <div class="field"><label>Barnets navn</label><input type="text" id="f-name" value="${esc(S.name)}" placeholder="fx Oscar"></div>
     <div class="field"><label>Modstander i duel</label><input type="text" id="f-opp" value="${esc(S.opponent)}"></div>
@@ -922,16 +958,17 @@ function parentMenu(){
     <input type="file" id="b-file" accept="application/json,.json" style="display:none">
     <div class="hr"></div><button class="btn big" id="f-save">Gem</button>
     <button class="btn ghost big" id="f-reset" style="margin-top:8px;color:var(--red)">Nulstil alt</button>`);
-  const b=$('#modal-body'); let newLevel=S.level;
-  b.querySelectorAll('[data-lvl]').forEach(x=>x.addEventListener('click',()=>{ newLevel=Number(x.dataset.lvl); b.querySelectorAll('[data-lvl]').forEach(y=>y.classList.toggle('on',y===x)); }));
+  const b=$('#modal-body'); let newUnl=S.unlocked, newDaily=S.daily||10;
+  b.querySelectorAll('[data-unl]').forEach(x=>x.addEventListener('click',()=>{ newUnl=Math.max(1,Math.min(pool().length,newUnl+Number(x.dataset.unl))); $('#unl').textContent=newUnl; }));
+  b.querySelectorAll('[data-daily]').forEach(x=>x.addEventListener('click',()=>{ newDaily=Number(x.dataset.daily); b.querySelectorAll('[data-daily]').forEach(y=>y.classList.toggle('on',y===x)); }));
   b.querySelectorAll('[data-eq]').forEach(x=>x.addEventListener('click',()=>{ E[x.dataset.eq]=!E[x.dataset.eq]; x.classList.toggle('on'); }));
   b.querySelectorAll('[data-del]').forEach(x=>x.addEventListener('click',()=>{ S.prizes=S.prizes.filter(p=>p.id!==x.dataset.del); x.closest('li').remove(); }));
   b.querySelectorAll('[data-adj]').forEach(x=>x.addEventListener('click',()=>{ S.points=Math.max(0,S.points+Number(x.dataset.adj)); $('#bal').textContent=S.points; }));
   $('#p-add').addEventListener('click',()=>{ const name=$('#p-name').value.trim(), cost=Number($('#p-cost').value), emoji=$('#p-emoji').value.trim()||'🎁'; if(!name||!cost) return toast('Skriv navn og point');
     S.prizes.push({id:'p'+Date.now(),emoji,name,cost}); $('#prize-list').insertAdjacentHTML('beforeend',`<li><div class="em">${emoji}</div><div class="nm"><b>${esc(name)}</b><small>${cost} point</small></div></li>`); $('#p-name').value='';$('#p-cost').value='';$('#p-emoji').value=''; });
   $('#p-reset').addEventListener('click',()=>{ if(confirm('Erstat præmielisten med standard-stigen (50–1000 point)?')){ const got=S.prizes.filter(p=>p.redeemedAt); S.prizes=defaultPrizes().map(p=>{ const g=got.find(x=>x.cost===p.cost); return g?{...p,redeemedAt:g.redeemedAt}:p; }); save(); closeModal(); parentMenu(); } });
-  $('#f-save').addEventListener('click',()=>{ const lvUp=newLevel>S.level; S.level=newLevel; S.name=$('#f-name').value.trim(); S.opponent=$('#f-opp').value.trim()||'Far'; const pin=$('#f-pin').value.trim(); S.settings.pin=/^\d{4}$/.test(pin)?pin:'';
-    const nb=checkBadges(); save(); closeModal(); toast('Gemt ✓'); header(); if(lvUp){ fanfare(); confetti(240); speak(`Tillykke! Du er nu på niveau ${S.level}: ${LEVEL_NAMES[S.level]}.`); show('home'); } else renderMore(); });
+  $('#f-save').addEventListener('click',()=>{ const changed=newUnl!==S.unlocked||newDaily!==(S.daily||10); S.unlocked=newUnl; S.daily=newDaily; if(changed) S.plan=null; const lvUp=false; S.name=$('#f-name').value.trim(); S.opponent=$('#f-opp').value.trim()||'Far'; const pin=$('#f-pin').value.trim(); S.settings.pin=/^\d{4}$/.test(pin)?pin:'';
+    const nb=checkBadges(); save(); closeModal(); toast('Gemt ✓'); header(); if(changed) show('home'); else renderMore(); });
   $('#f-reset').addEventListener('click',()=>{ if(confirm('Slet ALLE point, øvelser og præmier? Det kan ikke fortrydes (gem en backup først).')){ S=defaultState(); save(); closeModal(); header(); show('home'); } });
   $('#b-export').addEventListener('click',()=>{ const blob=new Blob([JSON.stringify(S)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`basketbold-backup-${today()}.json`; document.body.appendChild(a); a.click(); a.remove(); });
   $('#b-copy').addEventListener('click',async()=>{ try{ await navigator.clipboard.writeText(JSON.stringify(S)); toast('Kopieret – gem teksten i en note'); }catch(e){ prompt('Kopiér teksten herfra:', JSON.stringify(S)); } });

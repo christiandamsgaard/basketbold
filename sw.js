@@ -1,6 +1,6 @@
 // Basketbold service worker – gør appen tilgængelig offline.
 // Skift CACHE-navnet (fx v2, v3 …) hver gang du udgiver en ny version, så iPad'en henter den nye.
-const CACHE = 'basketbold-v4';
+const CACHE = 'basketbold-v6';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
